@@ -2,4 +2,4 @@
 Spring2021 - Fundamental of Computer System
 
 See also [Buaa-CO-2020Autumn](https://github.com/Snake52996/Buaa-CO-2020Autumn).  
-Duplicate problems are omitted.
+Duplicate solutions are omitted.
