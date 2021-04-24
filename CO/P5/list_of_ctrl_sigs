@@ -1,0 +1,12 @@
+ctrl_NPC_select:                ID  ->  NPC
+ctrl_ID_result_select:          ID
+ctrl_signed_extend:             ID
+ctrl_immediate_select:          ID
+ctrl_comparator_select:         ID
+ctrl_ALU_sub:                   EXE
+ctrl_ALU_operand2_select:       EXE
+ctrl_ALU_output_select:         EXE
+ctrl_MEM_read:                  MEM
+ctrl_MEM_write:                 MEM
+ctrl_GRF_write:                 WB  ->  GRF
+ctrl_GRF_write_address_select:  WB
