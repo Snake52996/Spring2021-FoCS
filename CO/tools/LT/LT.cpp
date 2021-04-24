@@ -11,16 +11,7 @@
 #include<fstream>
 #include<string>
 #include<regex>
-#ifdef __linux__
-#define REDCOLOR "\e[31;1m"
-#define GREENCOLOR "\e[32;1m"
-#define YELLOWCOLOR "\e[33;1m"
-#define BLUECOLOR "\e[34;1m"
-#define PURPLECOLOR "\e[35;1m"
-#define AOCOLOR "\e[36;1m"
-#define ENDCOLOR "\e[0m"
-#define LOGISIM_COMMAND "timeout %d %s -tty table %s > %s 2>/dev/null",config.timeout_,config.logisim_.c_str(),circ_path.c_str(),temp_out_path.c_str()
-#else
+#ifdef _WIN32
 #define REDCOLOR ""
 #define GREENCOLOR ""
 #define YELLOWCOLOR ""
@@ -28,9 +19,19 @@
 #define PURPLECOLOR ""
 #define AOCOLOR ""
 #define ENDCOLOR ""
-#define LOGISIM_COMMAND "Start-Job { %s -tty table %s > %s 2>/dev/null } | Wait-Job -Timeout %d ",config.logisim_.c_str(),circ_path.c_str(),temp_out_path.c_str(),config.timeout_
+#define LOGISIM_COMMAND "Start-Job -WorkingDirectory \"$PWD\" { %s -tty table %s > \"%s\" 2>Out-Null } | Wait-Job -Timeout %d",config.logisim_.c_str(),circ_path.string().c_str(),temp_out_path.string().c_str(),config.timeout_
+#define MARS_COMMAND "%s -Command %s nc db mc CompactDataAtZero dump .text HexText %s %s > %s",config.ps_.c_str(),config.mars_.c_str(),text_path.string().c_str(),test_case.string().c_str(),ans_path.string().c_str()
+#else
+#define REDCOLOR "\e[31;1m"
+#define GREENCOLOR "\e[32;1m"
+#define YELLOWCOLOR "\e[33;1m"
+#define BLUECOLOR "\e[34;1m"
+#define PURPLECOLOR "\e[35;1m"
+#define AOCOLOR "\e[36;1m"
+#define ENDCOLOR "\e[0m"
+#define LOGISIM_COMMAND "timeout %d \"%s\" -tty table \"%s\" > \"%s\" 2>/dev/null",config.timeout_,config.logisim_.c_str(),circ_path.c_str(),temp_out_path.c_str()
+#define MARS_COMMAND "\"%s\" nc db mc CompactDataAtZero dump .text HexText \"%s\" \"%s\" > \"%s\"",config.mars_.c_str(),text_path.string().c_str(),test_case.string().c_str(),ans_path.string().c_str()
 #endif
-using namespace tinyxml2;
 using namespace std;
 namespace fs = std::filesystem;
 enum Errors{
@@ -43,6 +44,9 @@ constexpr const char* DEFAULT_MARS = "./Mars.jar";
 constexpr const char* DEFAULT_CIRCUIT = "CPU.circ";
 constexpr const char* DEFAULT_DIR = "test";
 constexpr const char* DEFAULT_LOGISIM = "logisim";
+#ifdef _WIN32
+constexpr const char* DEFAULT_PS = "powershell";
+#endif
 struct Configuration{
     bool show_help_ = false;
     string mars_ = DEFAULT_MARS;
@@ -51,6 +55,11 @@ struct Configuration{
     string logisim_ = DEFAULT_LOGISIM;
     unsigned int thread_limit_ = 1;
     unsigned int timeout_ = 5;
+    bool debug = false;
+    #ifdef _WIN32
+    string ps_ = DEFAULT_PS;
+    #endif
+    bool cleanup = true;
 };
 struct CountInfo{
     private:
@@ -110,6 +119,11 @@ constexpr struct option LONG_CLI_ARGS[] = {
     {"with-logisim",    required_argument,  NULL,   'e'},
     {"with-circuit",    required_argument,  NULL,   'f'},
     {"timeout",         required_argument,  NULL,   'g'},
+    {"debug",           no_argument,        NULL,   'h'},
+#ifdef _WIN32
+    {"with-ps",         required_argument,  NULL,   'i'},
+#endif
+    {"no-cleanup",      no_argument,        NULL,   'j'},
     {NULL,              0,                  NULL,   0}
 };
 int getConfiguration(int argc, char** argv, Configuration& config){
@@ -147,6 +161,17 @@ int getConfiguration(int argc, char** argv, Configuration& config){
                 temp_int = strtol(optarg, &strtol_end, 10);
                 if(*strtol_end != '\0') break;
                 config.timeout_ = temp_int;
+                break;
+            case 'h':
+                config.debug = true;
+                break;
+            #ifdef _WIN32
+            case 'i':
+                config.ps_ = optarg;
+                break;
+            #endif
+            case 'j':
+                config.cleanup = false;
                 break;
             case '?':
                 return ERROR_INVALID_OPTION;
@@ -191,6 +216,12 @@ void showHelp(){
         "\t--timeout       指定Logisim仿真的超时时间(单位: 秒)\n"
         "\t                仿真将不会运行超过此时长\n"
         "\t                不提供该选项时的默认值: 5\n\n"
+        #ifdef _WIN32
+        "\t--with-ps       指定使用的powershell\n\n"
+        "\t                不提供该选项时的默认值: powershell\n\n"
+        #endif
+        "\t--debug         要求更多的日志输出\n\n"
+        "\t--no-cleanup    不进行临时文件的清理，调试时可能有用\n\n"
         "\n"
         "如何工作:\n"
         "\t通常而言您仅需要按照上述给出的说明正确指定参数即可使用LT\n"
@@ -203,11 +234,25 @@ void showHelp(){
         "\t\t在顶层添加一个额外的 1bit 输出并命名为 halt\n"
         "\t\t令当且仅当 WB 段的指令为 0x1000ffff 时其输出有效\n"
         "\t\t且这个端口必须位于所有的其他输出端口的下方\n"
-        "\t则当 Logisim 发现名为 halt 的端口有效时将终止仿真\n"
+        "\t则当 Logisim 发现名为 halt 的端口有效时将终止仿真\n\n"
+        "\n"
+        "系统相关:\n"
+        "\t本程序在 Ubuntu20.04.2 上开发，测试中未出现值得注意的特殊情况\n\n"
+        "\t在 Windows 10 1909 上的测试中发现如下的问题:\n"
+        "\t\t直接使用\"*.jar\"启动Mars可能导致输出丢失\n"
+        "\t\t 可在--with-mars使用\"java -jar *.jar\"解决\n"
+        "\t\t (测试环境为JRE 12.0.2+10)\n"
+        "\t\t可能出现\"系统无法找到指定的目录\"\n"
+        "\t\t 更新PowerShell版本可能有所帮助\n"
+        "\t\t 可以通过--with-ps指定使用的PowerShell\n\n"
+        "\t关于与其他系统的兼容性并无相关数据\n\n"
+        "更多信息:\n"
+        "\thttps://github.com/Snake52996/Spring2021-FoCS\n"
+        "\t 可以在CO/tools/LT找到(其实基本并没有更多信息)\n\n"
     );
 }
 namespace TXUtility{
-    XMLElement* findContent(XMLElement* entry){
+    tinyxml2::XMLElement* findContent(tinyxml2::XMLElement* entry){
         entry = entry->FirstChildElement();
         while(entry != NULL){
             if(
@@ -221,7 +266,7 @@ namespace TXUtility{
         }
         return NULL;
     }
-    void searchMemory(XMLElement* entry, char** name){
+    void searchMemory(tinyxml2::XMLElement* entry, char** name){
         while(entry != NULL && *name == NULL){
             if(
                 !strcmp(entry->Name(), "lib") &&
@@ -237,7 +282,7 @@ namespace TXUtility{
             entry = entry->NextSiblingElement();
         }
     }
-    XMLElement* searchROM(XMLElement* entry, const char* name){
+    tinyxml2::XMLElement* searchROM(tinyxml2::XMLElement* entry, const char* name){
         while(entry != NULL){
             if(
                 !strcmp(entry->Name(), "comp") &&
@@ -249,16 +294,16 @@ namespace TXUtility{
                 return findContent(entry);
             }
             if(!(entry->NoChildren())){
-                XMLElement* ret = searchROM(entry->FirstChildElement(), name);
+                tinyxml2::XMLElement* ret = searchROM(entry->FirstChildElement(), name);
                 if(ret != NULL) return ret;
             }
             entry = entry->NextSiblingElement();
         }
         return NULL;
     }
-    XMLElement* getROMContext(XMLDocument& doc){
+    tinyxml2::XMLElement* getROMContext(tinyxml2::XMLDocument& doc){
         char* memory_lib_name = NULL;
-        XMLElement* entry = doc.FirstChildElement();
+        tinyxml2::XMLElement* entry = doc.FirstChildElement();
         searchMemory(entry, &memory_lib_name);
         entry = doc.FirstChildElement();
         entry = searchROM(entry, memory_lib_name);
@@ -373,23 +418,35 @@ void functionalThread(
     CountInfo& count_info,
     const unsigned int id
 ){
+    if(config.debug) printf("线程%d: 已启动\n", id);
     char command_buffer[4096];
     char text_buffer[10010] = "addr/data: 10 32\n";
     const size_t text_start = strlen(text_buffer);
     fs::path work_dir = fs::temp_directory_path() / "LT-";
     work_dir += to_string(id);
+    if(config.debug) printf("线程%d: 工作目录为[%s]\n", id, work_dir.string().c_str());
     fs::create_directories(work_dir);
+    if(config.debug) printf("线程%d: 工作目录已创建\n", id);
     fs::path text_path = work_dir / "code.txt";
     fs::path ans_path = work_dir / "ans";
     fs::path temp_out_path = work_dir / "temp_out";
     fs::path out_path = work_dir / "out";
     fs::path circ_path = work_dir / "CPU.circ";
     fs::path test_case;
-    XMLDocument xml_doc;
+    if(config.debug) printf("线程%d: 正在尝试定位设计中的指令存储器(ROM)\n", id);
+    tinyxml2::XMLDocument xml_doc;
     xml_doc.LoadFile(config.circuit_.c_str());
-    XMLElement* content = TXUtility::getROMContext(xml_doc);
-    FILE* code_text = NULL;
+    tinyxml2::XMLElement* content = TXUtility::getROMContext(xml_doc);
+    if(config.debug) printf("线程%d: 指令存储器(ROM)已定位\n", id);
     FILE* temp_out = NULL;
+    #ifdef _WIN32
+    fs::path command_path = work_dir / "command.ps1";
+    temp_out = fopen(command_path.string().c_str(), "w");
+    fprintf(temp_out, LOGISIM_COMMAND);
+    fclose(temp_out);
+    if(config.debug) printf("线程%d: 已创建PowerShell指令文件\n", id);
+    #endif
+    FILE* code_text = NULL;
     FILE* out = NULL;
     size_t read_count;
     ifstream ans;
@@ -397,45 +454,61 @@ void functionalThread(
     string comment;
     int ret;
     while(true){
+        if(config.debug) printf("线程%d: 正在尝试获取下一个测试文件\n", id);
         ret = file_assigner.get(test_case);
-        if(!ret) break;
-        sprintf(
-            command_buffer,
-            "%s nc db mc CompactDataAtZero dump .text HexText %s %s > %s",
-            config.mars_.c_str(),
-            text_path.c_str(),
-            test_case.c_str(),
-            ans_path.c_str()
-        );
+        if(!ret){
+            if(config.debug) printf("线程%d: 所有测试文件已完成\n", id);
+            break;
+        }
+        if(config.debug) printf("线程%d: 已取得测试文件[%s]\n", id, test_case.string().c_str());
+        sprintf(command_buffer, MARS_COMMAND);
+        if(config.debug) printf("线程%d: 准备执行汇编和生成标准结果命令[%s]\n", id, command_buffer);
         system(command_buffer);
-        code_text = fopen(text_path.c_str(), "rb");
+        if(config.debug) printf("线程%d: 正在向指令存储器(ROM)写入指令\n", id);
+        code_text = fopen(text_path.string().c_str(), "rb");
         read_count = fread(text_buffer + text_start, 1, 10000 - text_start, code_text);
         fclose(code_text);
         sprintf(text_buffer + text_start + read_count, "\n1000ffff\n00000000");
         content->SetText(text_buffer);
-        xml_doc.SaveFile(circ_path.c_str());
+        xml_doc.SaveFile(circ_path.string().c_str());
+        #ifdef _WIN32
+        sprintf(command_buffer, "%s %s", config.ps_.c_str(), command_path.string().c_str());
+        #else
         sprintf(command_buffer, LOGISIM_COMMAND);
+        if(config.debug) printf("线程%d: 准备执行仿真指令[%s]\n", id, command_buffer);
+        #endif
         system(command_buffer);
-        temp_out = fopen(temp_out_path.c_str(), "r");
-        out = fopen(out_path.c_str(), "w");
+        if(config.debug) printf("线程%d: 正在解析您的 CPU 给出的输出\n", id);
+        temp_out = fopen(temp_out_path.string().c_str(), "r");
+        out = fopen(out_path.string().c_str(), "w");
         LogisimInterpreter::interpret(temp_out, out);
         fclose(temp_out);
         fclose(out);
+        if(config.debug) printf("线程%d: 正在比对您的结果和标准结果\n", id);
         ans.open(ans_path);
         your_ans.open(out_path);
         ret = AnswerComparator::compare(your_ans, ans, comment);
         if(ret == AnswerComparator::PASS){
-            printf("%s通过%s:\t%s\n", GREENCOLOR, ENDCOLOR, test_case.filename().c_str());
+            printf("%s通过%s:\t%s\n", GREENCOLOR, ENDCOLOR, test_case.filename().string().c_str());
             count_info.pass();
         }else if(ret == AnswerComparator::FAIL){
-            printf("%s失败%s:\t%s: %s\n", REDCOLOR, ENDCOLOR, test_case.filename().c_str(), comment.c_str());
+            printf("%s失败%s:\t%s: %s\n", REDCOLOR, ENDCOLOR, test_case.filename().string().c_str(), comment.c_str());
             count_info.fail();
         }else if(ret == AnswerComparator::EXCEPTION){
-            printf("%s异常%s:\t%s: %s\n", PURPLECOLOR, ENDCOLOR, test_case.filename().c_str(), comment.c_str());
+            printf("%s异常%s:\t%s: %s\n", PURPLECOLOR, ENDCOLOR, test_case.filename().string().c_str(), comment.c_str());
             count_info.exception();
         }
     }
-    fs::remove_all(work_dir);
+    if(config.cleanup){
+        if(config.debug) printf("线程%d: 工作已结束，正在尝试清理临时文件[%s]\n", id, work_dir.string().c_str());
+        try{
+            fs::remove_all(work_dir);
+            if(config.debug) printf("线程%d: 文件已清理\n", id);
+        }catch(const exception& e){
+            if(config.debug) printf("线程%d: 在清理中遇到了问题: %s\n", id, e.what());
+        }
+    }
+    if(config.debug) printf("线程%d: 正在退出\n", id);
 }
 int main(int argc, char** argv){
     Configuration config;
@@ -458,6 +531,7 @@ int main(int argc, char** argv){
         config.thread_limit_,
         config.timeout_
     );
+    printf("================================================================================\n\n");
     vector<thread> threads;
     FileAssigner file_assigner(config.test_dir_.c_str());
     CountInfo count_info;
@@ -467,6 +541,7 @@ int main(int argc, char** argv){
         threads.push_back(thread(functionalThread, ref(file_assigner), ref(config), ref(count_info), nonce_base + i));
     functionalThread(file_assigner, config, count_info, nonce_base + config.thread_limit_);
     for(auto& t: threads) t.join();
+    printf("\n================================================================================\n");
     printf("您通过了%lf%%的测试点。\n", count_info.getScore());
     return 0;
 }
