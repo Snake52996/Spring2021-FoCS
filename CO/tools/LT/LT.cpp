@@ -38,7 +38,8 @@ enum Errors{
     ERROR_OK = 0,
     ERROR_UNEXPECTED_NULL_POINTER = 1,
     ERROR_INVALID_OPTION,
-    ERROR_INVALID_LOGISIM_OUTPUT
+    ERROR_INVALID_LOGISIM_OUTPUT,
+    ERROR_DOUBTFUL_DESIGN
 };
 constexpr const char* DEFAULT_MARS = "./Mars.jar";
 constexpr const char* DEFAULT_CIRCUIT = "CPU.circ";
@@ -90,9 +91,13 @@ struct CountInfo{
             ++total_;
             ++doubt_;
         }
-        double getScore(){
+        void getScore(){
             lock_guard<mutex> lock(ci_mux_);
-            return static_cast<double>(passed_) / total_ * 100;
+            if(!total_) return;
+            if(passed_) printf("%s您通过了%lf%%的测试点，恭喜！%s\n", GREENCOLOR, static_cast<double>(passed_) / total_ * 100, ENDCOLOR);
+            if(failed_) printf("%s您在%lf%%的测试点中失败了，希望不是LT的问题...%s\n", REDCOLOR, static_cast<double>(failed_) / total_ * 100, ENDCOLOR);
+            if(exception_) printf("%s%lf%%的测试点中出现了异常，抱歉%s\n", PURPLECOLOR, static_cast<double>(exception_) / total_ * 100, ENDCOLOR);
+            if(doubt_) printf("%s%lf%%的测试点被通过了，但或许您的设计可能不是真正的流水线%s\n", YELLOWCOLOR, static_cast<double>(doubt_) / total_ * 100, ENDCOLOR);
         }
 };
 class FileAssigner{
@@ -316,6 +321,7 @@ namespace LogisimInterpreter{
     constexpr short ELEMENT_WIDTH[] = {32, 32, 1, 5, 32, 1, 32, 32};
     int interpret(FILE* input, FILE* output){
         char file_buffer[BUFFER_SIZE];
+        bool doubtful = true;
         size_t cur = 0, rare = 0;
         unsigned int values[8] = {0};
         unsigned short element_index = 0, read_width = 0;
@@ -335,6 +341,7 @@ namespace LogisimInterpreter{
                         if(element_index == 8){
                             if(values[2]) fprintf(output, "@%08x: $%d <= %08x\n", values[0], values[3], values[4]);
                             if(values[5]) fprintf(output, "@%08x: *%08x <= %08x\n", values[1], values[6], values[7]);
+                            if(values[2] && values[5]) doubtful = false;
                             for(unsigned int i = 0; i < 8; ++i) values[i] = 0;
                         }
                     }
@@ -345,6 +352,7 @@ namespace LogisimInterpreter{
             }
             ++cur;
         }
+        if(doubtful) return ERROR_DOUBTFUL_DESIGN;
         return ERROR_OK;
     }
 }
@@ -360,7 +368,7 @@ namespace AnswerComparator{
     constexpr const char* ILLEGALOUTPUT = "遭遇了非法的输出。这可能是您的CPU的错误，但更可能是此程序的问题。";
     constexpr const char* STANDARDOUTPUTILLEGAL = "在解析标准输出时遇到了错误。无法想象。";
     constexpr const char* TOOLONG = "您的输出比标准输出更长。";
-    constexpr const char* TOOSHORT = "您的输出比标准输出要短。";
+    constexpr const char* TOOSHORT = "您的输出比标准输出要短\n\t这可能是由于跳转异常，也可能是仿真未在超时前结束";
     string getNextLine(istream& log){
     	string temp;
     	smatch m;
@@ -453,6 +461,7 @@ void functionalThread(
     ifstream your_ans;
     string comment;
     int ret;
+    bool doubtful;
     while(true){
         if(config.debug) printf("线程%d: 正在尝试获取下一个测试文件\n", id);
         ret = file_assigner.get(test_case);
@@ -466,6 +475,11 @@ void functionalThread(
         system(command_buffer);
         if(config.debug) printf("线程%d: 正在向指令存储器(ROM)写入指令\n", id);
         code_text = fopen(text_path.string().c_str(), "rb");
+        if(code_text == NULL){
+            printf("%s异常%s:\t无法读取指令文件，或许测试代码[%s]是空的？\n", PURPLECOLOR, ENDCOLOR, test_case.filename().string().c_str());
+            count_info.exception();
+            continue;
+        }
         read_count = fread(text_buffer + text_start, 1, 10000 - text_start, code_text);
         fclose(code_text);
         sprintf(text_buffer + text_start + read_count, "\n1000ffff\n00000000");
@@ -481,16 +495,33 @@ void functionalThread(
         if(config.debug) printf("线程%d: 正在解析您的 CPU 给出的输出\n", id);
         temp_out = fopen(temp_out_path.string().c_str(), "r");
         out = fopen(out_path.string().c_str(), "w");
-        LogisimInterpreter::interpret(temp_out, out);
+        ret = LogisimInterpreter::interpret(temp_out, out);
         fclose(temp_out);
         fclose(out);
+        if(ret == ERROR_INVALID_LOGISIM_OUTPUT){
+            printf("在解析 Logisim 仿真输出时出现了错误\n\t清确保您设计的接口数量排列和定义符合要求\n");
+            exit(ERROR_INVALID_LOGISIM_OUTPUT);
+        }else if(ret == ERROR_DOUBTFUL_DESIGN) doubtful = true;
+        else doubtful = false;
         if(config.debug) printf("线程%d: 正在比对您的结果和标准结果\n", id);
         ans.open(ans_path);
         your_ans.open(out_path);
+        if(!ans.is_open() || !your_ans.is_open()){
+            printf("%s异常%s:\t无法读取输出文件%s\n", PURPLECOLOR, test_case.filename().string().c_str(), ENDCOLOR);
+            count_info.exception();
+            continue;
+        }
         ret = AnswerComparator::compare(your_ans, ans, comment);
+        ans.close();
+        your_ans.close();
         if(ret == AnswerComparator::PASS){
-            printf("%s通过%s:\t%s\n", GREENCOLOR, ENDCOLOR, test_case.filename().string().c_str());
-            count_info.pass();
+            if(doubtful){
+                printf("%s通过?%s:\t%s\n\t您的 CPU 的输出与标准一致，但从未同时(在同一周期)出现内存和寄存器写入\n\t这可能是本组数据的问题，例如指令间距离很大或无访存\n\t但还请留意是否确实为流水线设计\n", YELLOWCOLOR, ENDCOLOR, test_case.filename().string().c_str());
+                count_info.doubt();
+            }else{
+                printf("%s通过%s:\t%s\n", GREENCOLOR, ENDCOLOR, test_case.filename().string().c_str());
+                count_info.pass();
+            }
         }else if(ret == AnswerComparator::FAIL){
             printf("%s失败%s:\t%s: %s\n", REDCOLOR, ENDCOLOR, test_case.filename().string().c_str(), comment.c_str());
             count_info.fail();
@@ -542,6 +573,6 @@ int main(int argc, char** argv){
     functionalThread(file_assigner, config, count_info, nonce_base + config.thread_limit_);
     for(auto& t: threads) t.join();
     printf("\n================================================================================\n");
-    printf("您通过了%lf%%的测试点。\n", count_info.getScore());
+    count_info.getScore();
     return 0;
 }
