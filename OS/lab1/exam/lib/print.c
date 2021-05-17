@@ -35,6 +35,7 @@ int isSpecifier(char c){
 		case 'X':
 		case 'c':
 		case 's':
+		case 'T':
 			return 1;
 	}
 	return 0;
@@ -84,6 +85,7 @@ void lp_Print(
 	char padc;
 
 	int length;
+	__innerPrintfStruct* struct_p;
 
 	// define the state of prefix recognization
 	enum PrefixState{
@@ -230,6 +232,31 @@ void lp_Print(
 	    s = (char*)va_arg(ap, char *);
 	    localPrintString(output, arg, buf, s, width, ladjust);
 	    break;
+
+	 case 'T':
+	 	struct_p = (__innerPrintfStruct*)va_arg(ap, __innerPrintfStruct*);
+	 	int iii;
+	 	buf[0] = '{';
+	 	OUTPUT(arg, buf, 1);
+	 	for(iii = 0; iii < 3; ++iii){
+	 		num = struct_p->i;
+	 		if(num < 0){
+	 			negFlag = 1;
+	 			num = -num;
+	 		}else{
+	 			negFlag = 0;
+	 		}
+	 		length = PrintNum(buf, num, 10, negFlag, width, ladjust, padc, 0);
+	 		OUTPUT(arg, buf, length);
+	 		if(iii != 2){
+	 			buf[0] = ',';
+	 			OUTPUT(arg, buf, 1);
+	 		}
+	 		struct_p = struct_p->next;
+	 	}
+	 	buf[0] = '}';
+	 	OUTPUT(arg, buf, 1);
+	 	break;
 
 	 case '\0':
 	    fmt--;
