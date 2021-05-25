@@ -99,17 +99,13 @@ static Pte *boot_pgdir_walk(Pde *pgdir, u_long va, int create)
      * table. */
 	if(!(*pgdir_entryp & PTE_V)){
 		if(create){
-
 			pgtable = alloc(BY2PG, BY2PG, 1);
-
 			// here the address value in pgtable is a virtual address in kernel space
 			// convert it into physical address.
 			pgtable = PADDR(pgtable);
 			*pgdir_entryp = ((u_long)pgtable | PTE_V);
-
 		}
 	}else{
-
 	}
 
     /* Step 3: Get the page table entry for `va`, and return it. */
@@ -127,32 +123,26 @@ static Pte *boot_pgdir_walk(Pde *pgdir, u_long va, int create)
 	Size is a multiple of BY2PG.*/
 void boot_map_segment(Pde *pgdir, u_long va, u_long size, u_long pa, int perm)
 {
-
     int i, va_temp;
     Pte *pgtable_entry;
 
     /* Step 1: Check if `size` is a multiple of BY2PG. */
 	if(size % BY2PG){
-
 		return;
 	}
-
 
     /* Step 2: Map virtual address space to physical address. */
     /* Hint: Use `boot_pgdir_walk` to get the page table entry of virtual address `va`. */
 	u_long page_table_address;
 	for(i = 0; i < size; i += BY2PG){	// each time we deal with [va+i, va+i+BY2PG)
 		va_temp = va + i;
-
 		page_table_address = boot_pgdir_walk(pgdir, va_temp, 1);
 		// here page_table_address holds the (physical) address of page table
 		// which maps virtual address [va_temp, va_temp+BY2PG)
-
 		// convert it into kernel virtual address to access directly
 		page_table_address = KADDR(PTE_ADDR(page_table_address));
 		// next navigate to entry of [va_temp, va_temp+BY2PG) in page table
 		page_table_address = page_table_address + (PTX(va_temp) << 2);
-
 		// now we can finally map the address
 		*((u_long*)page_table_address) = (pa + i) | perm | PTE_V;
 	}
@@ -187,14 +177,12 @@ void mips_vm_init()
     pages = (struct Page *)alloc(npage * sizeof(struct Page), BY2PG, 1);
     printf("to memory %x for struct Pages.\n", freemem);
     n = ROUND(npage * sizeof(struct Page), BY2PG);
-
     boot_map_segment(pgdir, UPAGES, n, PADDR(pages), PTE_R);
 
     /* Step 3, Allocate proper size of physical memory for global array `envs`,
      * for process management. Then map the physical address to `UENVS`. */
     envs = (struct Env *)alloc(NENV * sizeof(struct Env), BY2PG, 1);
     n = ROUND(NENV * sizeof(struct Env), BY2PG);
-
     boot_map_segment(pgdir, UENVS, n, PADDR(envs), PTE_R);
 
     printf("pmap.c:\t mips vm init success\n");
@@ -224,7 +212,8 @@ page_init(void)
 
     /* Step 4: Mark the other memory as free. */
 	u_long pn;
-	for(pn = page2ppn(pa2page(PADDR(freemem))); pn < npage; ++pn){
+	u_long rare = page2ppn(pa2page(PADDR(freemem)));
+	for(pn = npage - 1; pn >= rare; --pn){
 		//printf("pmap.c:\tnow at page number %d\n", pn);
 		LIST_INSERT_HEAD(&page_free_list, pages + pn, pp_link);
 		//printf("pmap.c:\tadded to page_free_list\n");
@@ -250,13 +239,11 @@ page_init(void)
 int
 page_alloc(struct Page **pp)
 {
-
     struct Page *ppage_temp;
 
     /* Step 1: Get a page from free memory. If fail, return the error code.*/
 	// simply get the first usable i.e. free page from page_free_list
 	ppage_temp = LIST_FIRST(&page_free_list);
-
 	// if we got NULL from ppage_temp, we're out of memory
 	if(ppage_temp == NULL) return -E_NO_MEM;
 	// now we're sure that we've got an usable page, remove it from page_free_list
@@ -277,21 +264,31 @@ page_alloc(struct Page **pp)
 void
 page_free(struct Page *pp)
 {
-
     /* Step 1: If there's still virtual address referring to this page, do nothing. */
 	// check the pp_ref field
 	if(pp->pp_ref > 0){
-
 		return;
 	}
 
     /* Step 2: If the `pp_ref` reaches 0, mark this page as free and return. */
 	if(pp->pp_ref == 0){
-		// pp_ref is already 0, add to page_free_list
-		LIST_INSERT_HEAD(&page_free_list, pp, pp_link);
-
-		// and we've done here
-		return;
+		struct Page* target = LIST_FIRST(&page_free_list);
+		if(target == NULL){
+			LIST_INSERT_HEAD(&page_free_list, pp, pp_link);
+			return;
+		}
+		while(target != NULL){
+			if(page2ppn(target) > page2ppn(pp)){
+				LIST_INSERT_BEFORE(target, pp, pp_link);
+				return;
+			}else if(LIST_NEXT(target, pp_link) == NULL){
+				LIST_INSERT_AFTER(target, pp, pp_link);
+				return;
+			}else{
+				target = LIST_NEXT(target, pp_link);
+			}
+		}
+		panic("page_free: can't find a place for freed page!\n");
 	}
 
     /* If the value of `pp_ref` is less than 0, some error must occurr before,
@@ -319,7 +316,6 @@ page_free(struct Page *pp)
 int
 pgdir_walk(Pde *pgdir, u_long va, int create, Pte **ppte)
 {
-
     Pde *pgdir_entryp;
     Pte *pgtable;
     struct Page *ppage;
@@ -327,16 +323,12 @@ pgdir_walk(Pde *pgdir, u_long va, int create, Pte **ppte)
     /* Step 1: Get the corresponding page directory entry and page table. */
 	pgdir_entryp = pgdir + PDX(va);
 
-
     /* Step 2: If the corresponding page table is not exist(valid) and parameter `create`
      * is set, create one. And set the correct permission bits for this new page table.
      * When creating new page table, maybe out of memory. */
 	if((*pgdir_entryp & (PTE_R | PTE_V)) != (PTE_R | PTE_V)){
-
 		if(create){
-
 			if(page_alloc(&ppage) == -E_NO_MEM){
-
 				*ppte = NULL;
 				return -E_NO_MEM;
 			}
@@ -345,19 +337,15 @@ pgdir_walk(Pde *pgdir, u_long va, int create, Pte **ppte)
 			pgtable = page2pa(ppage);
 			// and we need to increase the pp_ref value of this new page
 			ppage->pp_ref++;
-
 			*pgdir_entryp = (u_long)pgtable | PTE_R | PTE_V;
-
 			pgtable = KADDR(PTE_ADDR(*pgdir_entryp));
 			pgtable += PTX(va);
 		}else{
-
 			pgtable = NULL;
 		}
 	}else{
 		pgtable = KADDR(PTE_ADDR(*pgdir_entryp));
 		pgtable += PTX(va);
-
 	}
 
     /* Step 3: Set the page table entry to `*ppte` as return value. */
@@ -380,23 +368,17 @@ pgdir_walk(Pde *pgdir, u_long va, int create, Pte **ppte)
 int
 page_insert(Pde *pgdir, struct Page *pp, u_long va, u_int perm)
 {
-
     u_int PERM;
     Pte *pgtable_entry;
     PERM = perm | PTE_V;
 
     /* Step 1: Get corresponding page table entry. */
     pgdir_walk(pgdir, va, 0, &pgtable_entry);
-
-	/*pgtable_entry = KADDR((u_long)pgtable_entry);
-*/
+	/*pgtable_entry = KADDR((u_long)pgtable_entry);*/
     if (pgtable_entry != 0 && (*pgtable_entry & PTE_V) != 0) {
-
         if (pa2page(*pgtable_entry) != pp) {
-
             page_remove(pgdir, va);
         } else	{
-
             tlb_invalidate(pgdir, va);
             *pgtable_entry = (page2pa(pp) | PERM);
             return 0;
@@ -408,20 +390,15 @@ page_insert(Pde *pgdir, struct Page *pp, u_long va, u_int perm)
 	tlb_invalidate(pgdir, va);
 
     /* Step 3: Do check, re-get page table entry to validate the insertion. */
-
 	int ret = pgdir_walk(pgdir, va, 1, &pgtable_entry);
 	// convert into kernel virtual address
 	//pgtable_entry = KADDR((u_long)pgtable_entry);
-
     /* Step 3.1 Check if the page can be insert, if can’t return -E_NO_MEM */
 	if(ret) return -E_NO_MEM;
     /* Step 3.2 Insert page and increment the pp_ref */
 	++(pp->pp_ref);
-
 	*pgtable_entry = (page2pa(pp) | PERM);
-
 	tlb_invalidate(pgdir, va);
-
     return 0;
 }
 
@@ -472,13 +449,11 @@ void page_decref(struct Page *pp) {
 void
 page_remove(Pde *pgdir, u_long va)
 {
-
     Pte *pagetable_entry;
     struct Page *ppage;
 
     /* Step 1: Get the page table entry, and check if the page table entry is valid. */
     ppage = page_lookup(pgdir, va, &pagetable_entry);
-
 
     if (ppage == 0) {
         return;
@@ -487,7 +462,6 @@ page_remove(Pde *pgdir, u_long va)
     /* Step 2: Decrease `pp_ref` and decide if it's necessary to free this page. */
 
     /* Hint: When there's no virtual address mapped to this page, release it. */
-
     ppage->pp_ref--;
     if (ppage->pp_ref == 0) {
         page_free(ppage);
@@ -608,7 +582,6 @@ physical_memory_manage_check(void)
 void
 page_check(void)
 {
-
     struct Page *pp, *pp0, *pp1, *pp2;
     struct Page_list fl;
 
@@ -621,8 +594,6 @@ page_check(void)
     assert(pp0);
     assert(pp1 && pp1 != pp0);
     assert(pp2 && pp2 != pp1 && pp2 != pp0);
-
-
     // temporarily steal the rest of the free pages
     fl = page_free_list;
     // now this page_free list must be empty!!!!
@@ -631,19 +602,13 @@ page_check(void)
     // should be no free memory
     assert(page_alloc(&pp) == -E_NO_MEM);
 
-
-
     // there is no free memory, so we can't allocate a page table
     assert(page_insert(boot_pgdir, pp1, 0x0, 0) < 0);
 
-
     // free pp0 and try again: pp0 should be used for page table
     page_free(pp0);
-
     assert(page_insert(boot_pgdir, pp1, 0x0, 0) == 0);
-
     assert(PTE_ADDR(boot_pgdir[0]) == page2pa(pp0));
-
 
     printf("va2pa(boot_pgdir, 0x0) is %x\n",va2pa(boot_pgdir, 0x0));
     printf("page2pa(pp1) is %x\n",page2pa(pp1));
