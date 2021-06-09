@@ -101,6 +101,8 @@ void page_remove(Pde *pgdir, u_long va) ;
 void tlb_invalidate(Pde *pgdir, u_long va);
 int page_alloc2(struct Page **pp);
 void get_page_status(int pa);
+int count_page_map(Pde* pgdir, int* count);
+u_long self_mapping(int type, u_long va, Pde* pgdir);
 
 void boot_map_segment(Pde *pgdir, u_long va, u_long size, u_long pa, int perm);
 

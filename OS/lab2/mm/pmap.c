@@ -521,6 +521,41 @@ void get_page_status(int pa){
 	printf("times:%d, page status:%d\n", count++, sig);
 }
 
+int count_page_map(Pde* pgdir, int* count){
+	Pte* table;
+	int index, i, j;
+	for(i = 0; i < npage; ++i) count[i] = 0x0;
+	count[page2ppn(pa2page(PADDR(pgdir)))] = 0x00400000;
+	for(i = 0; i < 1024; ++i){
+		if(pgdir[i] & PTE_V){
+			table = (Pte *)KADDR(PTE_ADDR(pgdir[i]));
+			index = page2ppn(pa2page(PADDR(table)));
+			count[index] += (1 << 12);
+			for(j = 0; j < 1024; ++j){
+				if(table[j] & PTE_V)
+					++count[page2ppn(pa2page(PTE_ADDR(table[j])))];
+			}
+		}
+	}
+	return npage;
+}
+u_long self_mapping(int type, u_long va, Pde* pgdir){
+u_long pd;
+int offset;
+switch(type){
+case 1:
+	return (va + (va >> 10));
+case 2:
+	va &= 0xffc00000;
+	pd = self_mapping(1, va, 0);
+	return (pd + (pd >> 10) - (va >> 10));
+case 3:
+	offset = (self_mapping(2, va, 0) - self_mapping(1, va, 0)) >> 2;
+	pgdir[offset] = PADDR(pgdir) | PTE_V;
+	return 0;
+}
+}
+
 void
 physical_memory_manage_check(void)
 {
