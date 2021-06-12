@@ -179,8 +179,7 @@ env_setup_vm(struct Env *e)
  *      (the value of PC should NOT be set in env_alloc)
  */
 /*** exercise 3.5 ***/
-int
-env_alloc(struct Env **new, u_int parent_id)
+int env_alloc(struct Env **new, u_int parent_id)
 {
     int r;
     struct Env *e;
@@ -200,9 +199,28 @@ env_alloc(struct Env **new, u_int parent_id)
 
     /*Step 4: Focus on initializing the sp register and cp0_status of env_tf field, located at this new Env. */
     e->env_tf.cp0_status = 0x10001004;
-
+	e->child = NULL;
+	e->last_brother = NULL;
+	e->next_brother = NULL;
 
     /*Step 5: Remove the new Env from env_free_list. */
+	LIST_REMOVE(e, env_link);
+	*new = e;
+	return 0;
+}
+int env_alloc_fork(struct Env **new, u_int parent_id){
+	int r;
+	struct Env *e;
+	e = LIST_FIRST(&env_free_list);
+	if(e == NULL) return -E_NO_FREE_ENV;
+	e->env_id = mkenvid(e);
+	e->env_parent_id = parent_id;
+	e->env_status = ENV_NOT_RUNNABLE;
+	e->env_tf.regs[29] = USTACKTOP;
+	e->env_tf.cp0_status = 0x10001004;
+	e->child = NULL;
+	e->last_brother = NULL;
+	e->next_brother = NULL;
 	LIST_REMOVE(e, env_link);
 	*new = e;
 	return 0;
@@ -404,6 +422,43 @@ env_destroy(struct Env *e)
         printf("i am killed ... \n");
         sched_yield();
     }
+}
+u_int fork(struct Env* e){
+	struct Env* new_e = NULL;
+	env_alloc_fork(&new_e, e->env_id);
+	new_e->env_status = e->env_status;
+	new_e->env_pgdir = e->env_pgdir;
+	new_e->env_cr3 = e->env_cr3;
+	new_e->env_pri = e->env_pri;
+	if(e->child == NULL) e->child = new_e;
+	else{
+		struct Env* t = e->child;
+		while(t->next_brother != NULL)
+			t = t->next_brother;
+		t->next_brother = new_e;
+		new_e->last_brother = t;
+	}
+	return new_e->env_id;
+}
+void lab3_output(u_int env_id){
+	struct Env* e = NULL;
+	envid2env(env_id, &e, 0);
+	printf(
+		"%08x %08x %08x %08x\n",
+		e->env_parent_id,
+		(e->child == NULL) ? 0 : e->child->env_id,
+		(e->last_brother == NULL) ? 0 : e->last_brother->env_id,
+		(e->next_brother == NULL) ? 0 : e->next_brother->env_id
+	);
+}
+static int lab3_get_sum_helper(struct Env* t){
+	if(t == NULL) return 0;
+	return lab3_get_sum_helper(t->child) + lab3_get_sum_helper(t->next_brother) + 1;
+}
+int lab3_get_sum(u_int env_id){
+	struct Env* t;
+	envid2env(env_id, &t, 0);
+	return lab3_get_sum_helper(t->child) + 1;
 }
 
 extern void env_pop_tf(struct Trapframe *tf, int id);
