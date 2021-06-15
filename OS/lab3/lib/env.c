@@ -460,6 +460,52 @@ int lab3_get_sum(u_int env_id){
 	envid2env(env_id, &t, 0);
 	return lab3_get_sum_helper(t->child) + 1;
 }
+void lab3_kill(u_int env_id){
+	struct Env* killed  = NULL;
+	envid2env(env_id, &killed, 0);
+	struct Env* t = killed;
+	struct Env* t2 = NULL;
+	while(1){
+		env_id = t->env_parent_id;
+		if(env_id == t->env_id) break;
+		if(env_id == 0) break;
+		if(envid2env(env_id, &t2, 0)) break;
+		t = t2;
+	}
+	// now t points to the root
+	env_id = killed->env_parent_id;
+	envid2env(env_id, &t2, 0);
+	// t2 points to the parent of killed
+	// free killed
+	killed->env_pgdir = 0;
+	killed->env_cr3 = 0;
+	killed->env_status = ENV_FREE;
+	LIST_INSERT_HEAD(&env_free_list, killed, env_link);
+	// relink the tree
+	if(killed->last_brother != NULL) killed->last_brother->next_brother = killed->next_brother;
+	else t2->child = killed->next_brother;
+	if(killed->next_brother != NULL) killed->next_brother->last_brother = killed->last_brother;
+	// arrange its children properly
+	if(t->child == NULL) t->child = killed->child;
+	else{
+		t2 = t->child;
+		while(t2->next_brother != NULL){
+			t2 = t2->next_brother;
+		}
+		t2->next_brother = killed->child;
+		if(killed->child != NULL) killed->child->last_brother = t2;
+	}
+	t2 = killed->child;
+	while(t2 != NULL){
+		t2->env_parent_id = t->env_id;
+		t2 = t2->next_brother;
+	}
+	// now finally empty killed
+	killed->last_brother = NULL;
+	killed->next_brother = NULL;
+	killed->child = NULL;
+	// for dust thou art, and unto dust shalt thou return.
+}
 
 extern void env_pop_tf(struct Trapframe *tf, int id);
 extern void lcontext(u_int contxt);

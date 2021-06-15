@@ -31,3 +31,4 @@ int env_alloc_fork(struct Env **e, u_int parent_id);
 u_int fork(struct Env* e);
 void lab3_output(u_int env_id);
 int lab3_get_sum(u_int env_id);
+void lab3_kill(u_int env_id);
