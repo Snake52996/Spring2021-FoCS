@@ -26,6 +26,7 @@ struct Env {
 	struct Env* child;
 	struct Env* last_brother;
 	struct Env* next_brother;
+	u_int countdown;
 };
 int env_alloc_fork(struct Env **e, u_int parent_id);
 u_int fork(struct Env* e);
